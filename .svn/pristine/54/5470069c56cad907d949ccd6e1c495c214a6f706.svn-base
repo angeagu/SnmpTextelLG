@@ -1,0 +1,155 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+package snmpAgent.data;
+
+import java.util.ArrayList;
+import snmpAgent.SnmpAgent;
+import org.apache.log4j.Logger;
+
+/**
+ *
+ * @author Tecnovision
+ */
+public class SoftwareNotificationCondition {
+    
+    public final static int BOUND = 0;
+    public final static int STRING_VALUE_ERROR_CONDITION = 1;
+    public final static int VALUE_MUST_MATCH_TO = 2;
+
+    private int retries;
+    private int lowerBound;
+    private int upperBound;
+    private String errorValue;
+    private String notificationOid;
+    private int condition;
+    private ArrayList<String> valueMustMatchToOidsValue;
+    private final String descriptionForLog;
+
+    private static final Logger log = Logger.getLogger(SoftwareNotificationCondition.class.getName());
+
+    public SoftwareNotificationCondition(String lowerBound, String upperBound,
+                        String notificationOid, int retries, String descriptionForLog) {
+
+        this.descriptionForLog = descriptionForLog;
+        
+        try{
+            this.retries = retries;
+            this.lowerBound = Integer.parseInt(lowerBound);
+            this.upperBound = Integer.parseInt(upperBound);
+            this.notificationOid = notificationOid;
+            this.condition = BOUND;
+            this.errorValue = null;
+            this.valueMustMatchToOidsValue = null;
+            
+
+        }catch(NumberFormatException ex){
+            log.error("Los límites de las notificaciones software deben ser numericas.");
+        }
+    }
+
+    
+    public SoftwareNotificationCondition(String stringValueError, String notificationOid,
+            int retries, String descriptionForLog) {
+        this.lowerBound = -1;
+        this.upperBound = -1;
+        this.retries = retries;
+        this.errorValue = stringValueError;
+        this.notificationOid = notificationOid;
+        this.valueMustMatchToOidsValue = null;
+        this.condition = STRING_VALUE_ERROR_CONDITION;
+        this.descriptionForLog = descriptionForLog;
+    }
+
+    public SoftwareNotificationCondition(String[] matchToValueOfOidElements,
+                        String notificationOid, int retries, String descriptionForLog) {
+        
+        this.lowerBound = -1;
+        this.upperBound = -1;
+        this.errorValue = null;
+        this.retries = retries;
+        this.notificationOid = notificationOid;
+        this.valueMustMatchToOidsValue = new ArrayList<>();
+        this.descriptionForLog = descriptionForLog;
+
+        for (String element : matchToValueOfOidElements) {
+            valueMustMatchToOidsValue.add(element);
+        }
+        
+        this.condition = VALUE_MUST_MATCH_TO;
+    }
+    
+    public String getNotificationOid() {
+        return notificationOid;
+    }
+    
+    
+    public boolean check(String value, SnmpAgent agent){
+        boolean sendSwNotification = false;
+
+        if (value != null) {
+            
+            switch(condition){
+                case BOUND:
+
+                    /* Cuando se pierde la comunicacion con las tarjetas, el valor
+                       que se manda a todos los nodos de esa tarjeta es "" */
+                    if(value.length() > 0){
+                        try {
+                            int currentValue = Integer.parseInt(value);
+                            if ((currentValue < lowerBound) || (currentValue > upperBound)) {
+                                sendSwNotification = true;
+                            }
+
+                        } catch (NumberFormatException e) {
+                            log.error("Software condition [BOUND] and value [" + value + "]");
+                        }
+                    }
+                    
+                    break;
+
+                case STRING_VALUE_ERROR_CONDITION:
+
+                    if (value.equalsIgnoreCase(errorValue)) {
+                        sendSwNotification = true;
+                    }
+                    
+                    break;
+
+                case VALUE_MUST_MATCH_TO:
+
+                    for (String currentOid : valueMustMatchToOidsValue) {
+
+                        if (agent.getInfoByOid(currentOid) != null) {
+                            String currentValue = agent.getInfoByOid(currentOid).toString();
+
+                            if (!value.equalsIgnoreCase(currentValue)) {
+                                sendSwNotification = true;
+                            }
+                        }
+                    }
+
+                    break;
+
+                default:
+                    log.error("Unexpected notification condition: " + condition);
+            }
+
+        // si Value es NULL estoy en error porque deberia tener esta informacion (suele pasar en el arranque)
+        } else {
+            sendSwNotification = true;
+        }
+
+        return sendSwNotification;
+    }
+
+    public int getRetries() {
+        return retries;
+    }
+
+    public String getDescriptionForLog() {
+        return descriptionForLog;
+    }
+}

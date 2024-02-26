@@ -1,0 +1,536 @@
+-- ***************************************************************************
+-- *
+-- * Copyright (c) 2015 Textel Marimón s.a. Inc. All Rights Reserved.
+-- *
+-- * Module Name:  TEXTEL-TLI3
+-- *
+-- * Description:  DEFINE OBJETOS PARA MANEJAR TELEINDICADORES  
+-- * 
+-- ***************************************************************************
+
+TEXTEL-TLI3 DEFINITIONS ::= BEGIN
+
+
+	IMPORTS
+	NOTIFICATION-TYPE, OBJECT-TYPE, MODULE-IDENTITY, 
+	enterprises, Integer32
+		FROM SNMPv2-SMI
+	NOTIFICATION-GROUP, OBJECT-GROUP, MODULE-COMPLIANCE
+		FROM SNMPv2-CONF
+	RowStatus, DisplayString
+		FROM SNMPv2-TC;
+
+
+textel-Marimon 	OBJECT IDENTIFIER ::= { enterprises 46536 }
+
+
+	nombreCompleto OBJECT-TYPE
+	SYNTAX OCTET STRING
+	ACCESS read-only
+	STATUS current
+	DESCRIPTION
+		"Nombre del fabricante del display."
+	::= { textel-Marimon 1 }
+
+
+display OBJECT IDENTIFIER ::= { textel-Marimon 2 }
+
+		
+	lane OBJECT-TYPE
+		SYNTAX OCTET STRING
+		ACCESS read-only
+		STATUS current
+		DESCRIPTION
+			"Linea donde está instalado el teleindicador."
+		::= { display 1 }
+
+	station OBJECT-TYPE
+		SYNTAX OCTET STRING
+		ACCESS read-only
+		STATUS current
+		DESCRIPTION
+			"Estación."
+		::= { display 2 }
+
+	platform OBJECT-TYPE
+		SYNTAX INTEGER
+		ACCESS read-only
+		STATUS current
+		DESCRIPTION
+			"Andén."
+		::= { display 3 }
+
+	position OBJECT-TYPE
+		SYNTAX INTEGER
+		ACCESS read-only
+		STATUS current
+		DESCRIPTION
+			"Número de orden en el andén."
+		::= { display 4 }
+
+	displayGeneralStatus OBJECT-TYPE
+		SYNTAX OCTET STRING
+		ACCESS read-only
+		STATUS current
+		DESCRIPTION
+			"Estado general del teleindicador (Ok / Error)."
+		::= { display 5 }
+
+
+	master OBJECT IDENTIFIER ::= { display 6 }  
+
+
+	masterAlarmas OBJECT IDENTIFIER ::= { master 1 }
+
+
+		masterUsbTarjetaAlarmas OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: estado USB tarjeta alarmas (Ok / Error)."
+			::= { masterAlarmas 1 }
+
+		masterDisplayEncendido OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-write
+			STATUS current
+			DESCRIPTION
+				"Master: encendido (0 = OFF / 1 = ON)."
+			::= { masterAlarmas 2 }
+	
+		masterPuerta OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: estado puerta (Abierta / Cerrada)."
+			::= { masterAlarmas 3 }
+	
+		masterTemperaturaInterior OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: temperatura interior (°C)."
+			::= { masterAlarmas 4 }
+	
+		masterTermostato OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-write
+			STATUS current
+			DESCRIPTION
+				"Master: estado termostato (0 = OFF / 1 = ON)."
+			::= { masterAlarmas 5 }
+	
+		masterVentilador1 OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: estado del ventilador 1 (Ok / Error)."
+			::= { masterAlarmas 6 }
+	
+		masterVentilador2 OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: estado del ventilador 2 (Ok / Error)."
+			::= { masterAlarmas 7 }
+	
+		masterVentilador3 OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: estado del ventilador 3 (Ok / Error)."
+			::= { masterAlarmas 8 }
+	
+		masterVentilador4 OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: estado del ventilador 4 (Ok / Error)."
+			::= { masterAlarmas 9 } 
+
+			
+	masterErrores OBJECT IDENTIFIER ::= { master 2 }
+
+	
+		masterUsbTarjetaErrores OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: estado USB tarjeta errores (Ok / Error)."
+			::= { masterErrores 1 }
+	
+		masterNivelFotocelula OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: nivel fotócelula (1 - 100 / 0 = error)."
+			::= { masterErrores 2 }     
+			
+		masterLeds OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: número de leds con error."
+			::= { masterErrores 3 }
+
+		masterModulos OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: número de filas de módulos con error."
+			::= { masterErrores 4 }
+
+
+	masterNotificaciones OBJECT IDENTIFIER ::= { master 3 }
+
+
+		masterDisplayApagado NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: display apagado."
+			::= { masterNotificaciones 1 }
+
+	 	masterErrorUsbAlarms NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: error Usb."
+			::= { masterNotificaciones 2 } 
+		
+	 	masterErrorUsbErrors NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: error Usb."
+			::= { masterNotificaciones 3 } 
+		
+	 	masterPuertaAbierta NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: puerta abierta."
+			::= { masterNotificaciones 4 } 
+		
+		masterTemperaturaExcedida NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: temperatura excedida."
+			::= { masterNotificaciones 5 }
+		
+		masterErrorVentiladores NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: fallo en ventiladores."
+			::= { masterNotificaciones 6 }
+		
+		masterErrorLeds NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: leds con error."
+			::= { masterNotificaciones 7 }  
+		
+		masterErrorModulos NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: módulos Led con error."
+			::= { masterNotificaciones 8 }  
+		
+		masterImpacto NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: impacto (en Gs)."
+			::= { masterNotificaciones 9 }  
+
+		masterErrorFotocelula NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Master: fotocélula con error."
+			::= { masterNotificaciones 10 } 
+
+		masterErrorUsbMonitor NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"MasterMonitor: error Usb."
+			::= { masterNotificaciones 11 }  
+
+	
+	masterMonitor OBJECT IDENTIFIER ::= { master 4 }
+
+
+		masterMonitorUsb OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Master: estado USB Monitor (Ok / Error)."
+			::= { masterMonitor 1 }
+
+		masterMonitorEncendido OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-write
+			STATUS current
+			DESCRIPTION
+				"Master: Monitor encendido (00 = OFF / 01 = ON)."
+			::= { masterMonitor 2 }
+	
+
+	slave OBJECT IDENTIFIER ::= { display 7 }  
+
+
+	slaveAlarmas OBJECT IDENTIFIER ::= { slave 1 }
+
+
+		slaveUsbTarjetaAlarmas OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: estado USB tarjeta alarmas (Ok / Error)."
+			::= { slaveAlarmas 1 }
+
+		slaveDisplayEncendido OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-write
+			STATUS current
+			DESCRIPTION
+				"Slave: encendido (0 = OFF / 1 = ON)."
+			::= { slaveAlarmas 2 }
+	
+		slavePuerta OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: estado puerta (Abierta / Cerrada)."
+			::= { slaveAlarmas 3 }
+	
+		slaveTemperaturaInterior OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: temperatura interior (°C)."
+			::= { slaveAlarmas 4 }
+	
+		slaveTermostato OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-write
+			STATUS current
+			DESCRIPTION
+				"Slave: estado termostato (0 = OFF / 1 = ON)."
+			::= { slaveAlarmas 5 }
+	
+		slaveVentilador1 OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: estado del ventilador 1 (Ok / Error)."
+			::= { slaveAlarmas 6 }
+	
+		slaveVentilador2 OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: estado del ventilador 2 (Ok / Error)."
+			::= { slaveAlarmas 7 }
+	
+		slaveVentilador3 OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: estado del ventilador 3 (Ok / Error)."
+			::= { slaveAlarmas 8 }
+	
+		slaveVentilador4 OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: estado del ventilador 4 (Ok / Error)."
+			::= { slaveAlarmas 9 } 
+
+			
+	slaveErrores OBJECT IDENTIFIER ::= { slave 2 }
+
+	
+		slaveUsbTarjetaErrores OBJECT-TYPE
+			SYNTAX OCTET STRING
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: estado USB tarjeta errores (Ok / Error)."
+			::= { slaveErrores 1 }
+	
+		slaveNivelFotocelula OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: nivel fotócelula (1 - 100 / 0 = error)."
+			::= { slaveErrores 2 }     
+			
+		slaveLeds OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: número de leds con error."
+			::= { slaveErrores 3 }
+
+		slaveModulos OBJECT-TYPE
+			SYNTAX Integer32
+			ACCESS read-only
+			STATUS current
+			DESCRIPTION
+				"Slave: número de filas de módulos con error."
+			::= { slaveErrores 4 }
+
+
+	slaveNotificaciones OBJECT IDENTIFIER ::= { slave 3 }
+
+
+		slaveDisplayApagado NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: display apagado."
+			::= { slaveNotificaciones 1 }
+
+	 	slaveErrorUsbAlarms NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: error Usb."
+			::= { slaveNotificaciones 2 } 
+		
+	 	slaveErrorUsbErrors NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: error Usb."
+			::= { slaveNotificaciones 3 } 
+		
+	 	slavePuertaAbierta NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: puerta abierta."
+			::= { slaveNotificaciones 4 } 
+		
+		slaveTemperaturaExcedida NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: temperatura excedida."
+			::= { slaveNotificaciones 5 }
+		
+		slaveErrorVentiladores NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: fallo en ventiladores."
+			::= { slaveNotificaciones 6 }
+		
+		slaveErrorLeds NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: leds con error"
+			::= { slaveNotificaciones 7 }  
+		
+		slaveErrorModulos NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: módulos Led con error"
+			::= { slaveNotificaciones 8 }  
+		
+		slaveImpacto NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: impacto (en Gs)"
+			::= { slaveNotificaciones 9 }  
+
+		slaveErrorFotocelula NOTIFICATION-TYPE
+			STATUS current
+			DESCRIPTION
+				"Slave: fotocélula con error"
+			::= { slaveNotificaciones 10 }  
+
+
+trapParameters OBJECT IDENTIFIER ::= { textel-Marimon 3 }
+
+		
+	trapIp OBJECT-TYPE
+		SYNTAX OCTET STRING
+		ACCESS read-write
+		STATUS current
+		DESCRIPTION
+			"IP del administrador para envío de traps."
+		::= { trapParameters 1 }
+
+	trapPort OBJECT-TYPE
+		SYNTAX OCTET STRING
+		ACCESS read-write
+		STATUS current
+		DESCRIPTION
+			"Puerto del administrador para envío de traps."
+		::= { trapParameters 2 }
+
+
+directText OBJECT IDENTIFIER ::= { textel-Marimon 4 }
+
+		
+	fontName OBJECT-TYPE
+		SYNTAX OCTET STRING
+		ACCESS read-write
+		STATUS current
+		DESCRIPTION
+			"nombre de Font para texto directo."
+		::= { directText 1 }
+
+	fontStyle OBJECT-TYPE
+		SYNTAX Integer32
+		ACCESS read-write
+		STATUS current
+		DESCRIPTION
+			"estilo de Font para texto directo."
+		::= { directText 2 }
+
+	fontColor OBJECT-TYPE
+		SYNTAX OCTET STRING
+		ACCESS read-write
+		STATUS current
+		DESCRIPTION
+			"color de Font (RGB) para texto directo."
+		::= { directText 3 }
+
+	textHeader OBJECT-TYPE
+		SYNTAX OCTET STRING
+		ACCESS read-write
+		STATUS current
+		DESCRIPTION
+			"cabecera de texto directo."
+		::= { directText 4 }
+
+	textMessage OBJECT-TYPE
+		SYNTAX OCTET STRING
+		ACCESS read-write
+		STATUS current
+		DESCRIPTION
+			"mensaje de texto directo."
+		::= { directText 5 }
+
+	lifeSpan OBJECT-TYPE
+		SYNTAX Integer32
+		ACCESS read-write
+		STATUS current
+		DESCRIPTION
+			"minutos de permanencia."
+		::= { directText 6 }
+
+
+END

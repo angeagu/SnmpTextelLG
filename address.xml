@@ -1,0 +1,8 @@
+<ADDRESS>
+	<PANEL brightness_profile="INDOOR">
+		<INFO OID="1.3.6.1.4.1.46536.2.1.0" VALUE="SN0011" ID="lane"/>
+		<INFO OID="1.3.6.1.4.1.46536.2.2.0" VALUE="----" ID="station"/>
+		<INFO OID="1.3.6.1.4.1.46536.2.3.0" VALUE="1" ID="platform"/>
+		<INFO OID="1.3.6.1.4.1.46536.2.4.0" VALUE="1" ID="position"/>
+	</PANEL>
+</ADDRESS>

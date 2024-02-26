@@ -1,0 +1,23 @@
+//	DETECCION DE ERRORES 
+//
+//    --> Protocolo de comunicación:
+//          | 0x02 | comando   | 0x03 |      ->Solicitud de un comando
+//          | 0x02 | respuesta | 0x03 |      -> Respuesta de la CPU
+//
+//    --> Comandos disponibles:
+//        | Comando  |        Función      |     Respuesta   |
+//         ____________________________________________________________________________________________________
+//        |    ET?   |  Solicita el estado |  E led1, led2.. | El estado de la totalidad de leds en pantalla   |
+//        |          |  de la totalidad de |      .... ledn  | comienza con el píxel superior izquierdo fina-  |
+//        |          |  leds en pantalla   |                 | lizando con el inferior derecho.                |
+//        						       	El estado de cada píxel se entrega en un byte  |
+//        							con el siguiente formato:                      |
+//        							--> 0BXXXX1RGB. X=0, error en fila de placas.  | 
+//										X=1, fila ok	               |
+//										RGB: 1=led OK		       |
+//         ____________________________________________________________________________________________________|
+//        |    L?    |  Solicita el nivel  |       Lnnn      				|
+//        |          |  de luz             | nnn: 000 - 255  	000: sensor estropeado	|
+//         __________________________________________________
+//        |    Q?    |  Pregunta el lado   |       ERx       |  
+//        |          |   de la pantalla    |    x: 1 ó 2     |

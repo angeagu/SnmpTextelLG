@@ -1,0 +1,54 @@
+//	COMANDOS CPU ALARMAS
+//
+//    --> Protocolo de comunicación:
+//          | 0x02 | datos | 0x03 |      ->Solicitud de un comando o solicitud
+//          | 0x02 | datos | 0x03 |      -> Respuesta de la CPU
+//
+//    --> Comandos:
+//        | Comando  |        Función        |     Respuesta  |
+//        _____________________________________________________
+//        |    DE    |      Display on       |     XDE 0x06   |                 
+//        _____________________________________________________
+//        |    DA    |     Display off       |     XDA 0x06   |
+//        _____________________________________________________
+//        |    DT    | Display on 5 segundos |     XDT 0x06   |
+//        _____________________________________________________
+//        |    SE    |     Termostato on     |     XSE 0x06   |
+//        _____________________________________________________
+//        |    SA    |     Termostato off    |     XSA 0x06   |
+//
+//
+//    --> Solicitudes de estado:
+//        | Comando  |    Solicitud       |      Respuesta      |
+//        _______________________________________________________
+//        |    D?    |  Estado de la      |         Dx          | 
+//        |          |  pantalla          |   x: 0=off, 1=on    |
+//        _______________________________________________________
+//        |    Q?    |  Lado o cara de    |         ALx         |
+//        |          |  la pantalla       |      x: 1 ó 2       |
+//        _______________________________________________________
+//        |    S?    |  Estado del        |         Sx          |
+//        |          |  termostato        |   x: 0=off, 1=on    |
+//        _______________________________________________________
+//        |    V?    |  Estado de los     |    V1xV2xV3xV4x     |
+//        |          |  ventiladores      |   x: 0=off, 1=on    |
+//        _______________________________________________________
+//        |    P?    |  Estado de la      |         Px          |
+//        |          |  puerta            |  x: A=abi., C=cerr. |
+//        _______________________________________________________
+//        |    T?    |  Nivel de          |         T±x         |
+//        |          |  temperatura       |  x: -55° <-> 125°   |
+//        _______________________________________________________
+//        |    L?    |  Nivel de luz      |        Lnnn         |
+//        |          |                    |  nnn: 000 <-> 255   |
+//
+//
+//    --> Traps
+//        |    Información    |     Trap        |
+//        _______________________________________
+//        | Golpe detectado   |      Gnn        |
+//        |                   | nn: 00g <-> 15g |
+//        _______________________________________
+//        |  Puerta abierta   |       P!        |
+//        _______________________________________
+//        |    Display off    |       D!        |

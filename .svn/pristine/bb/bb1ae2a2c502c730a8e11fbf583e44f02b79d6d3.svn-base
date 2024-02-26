@@ -1,0 +1,799 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+package snmpAgent;
+
+import configuration.Configuration;
+import configuration.Loader;
+import configuration.Utilities;
+import configuration.data.CardIdentifier;
+import configuration.data.CheckerData;
+import configuration.data.Command;
+import configuration.data.CommandForHW;
+import configuration.data.CommandForMEMORY;
+import configuration.data.CommandForXML;
+import hardwareLayer.HardwareDataProcessor;
+import hardwareLayer.writers.AbstractWriter;
+import snmpAgent.data.Node;
+import snmpAgent.data.LeafNode;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Objects;
+import java.util.Timer;
+import java.util.TreeSet;
+import org.apache.log4j.Logger;
+import org.snmp4j.CommunityTarget;
+import org.snmp4j.PDU;
+import org.snmp4j.Snmp;
+import org.snmp4j.TransportMapping;
+import org.snmp4j.mp.MPv3;
+import org.snmp4j.mp.MessageProcessingModel;
+import org.snmp4j.mp.SnmpConstants;
+import org.snmp4j.security.SecurityModels;
+import org.snmp4j.security.SecurityProtocols;
+import org.snmp4j.security.USM;
+import org.snmp4j.smi.OID;
+import org.snmp4j.smi.OctetString;
+import org.snmp4j.smi.UdpAddress;
+import org.snmp4j.smi.Variable;
+import org.snmp4j.smi.VariableBinding;
+import org.snmp4j.transport.DefaultUdpTransportMapping;
+import snmpAgent.data.SoftwareNotificationCondition;
+
+/**
+ *
+ * @author Tecnovision
+ */
+public class SnmpAgent {
+
+    public final static String EMPTY_ANSWER = "";
+    public final static int TIMEOUT_TO_RECEIVE_HARDWARE_RESPONSE = 5000;
+    public final static int NUMBER_OF_RETRIES_TO_SEND_NOTIFICATION = 2;
+    public final static int TIMEOUT_TO_SEND_NOTIFICATION = 1000;
+
+    // Comandos software aceptados
+    private final static String REBOOT = "REBOOT";
+    private final static String AUDIO_TEST_ON = "AUDIO_TEST_ON";
+    private final static String AUDIO_TEST_OFF = "AUDIO_TEST_OFF";
+    private final static String VIDEO_TEST_ON = "VIDEO_TEST_ON";
+    private final static String VIDEO_TEST_OFF = "VIDEO_TEST_OFF";
+    private final static String REBOOT_WITH_DISPLAY_OFF = "REBOOT_WITH_DISPLAY_OFF";
+    private final static List<String> SOFTWARE_COMMANDS_ON_SNMP_SET = Arrays.asList(REBOOT, REBOOT_WITH_DISPLAY_OFF, AUDIO_TEST_ON, AUDIO_TEST_OFF, VIDEO_TEST_ON, VIDEO_TEST_OFF);
+
+    private ProcessLauncher audioTestProcess;
+    private ProcessLauncher videoTestProcess;
+
+    // Informacion para el envio de notificaciones
+    public String community_read_only;
+    public String community_read_write;
+
+    private final HashMap<CardIdentifier, HardwareDataProcessor> procesadores;
+    private HashMap<String, String> answerForCommandID;
+    private final Object mutexForAnswerForCommandId;
+    private final Object mutexForSendingHWCommand;
+
+    private final Object mutexCanSendSnmpNotification;
+    private boolean canSendSnmpNotification;
+    private Snmp snmp;
+    private final Node rootOfMibTree;
+    private final Object mutexForMibTree;                  // Esta barrera es para el nodo rootOfMibTree
+    private final Object mutexForClosing;
+
+    private final HashMap<String, LeafNode> oidToLeafNodeAgent;
+    private final HashMap<String, Node> oidToNextNode;
+    private final ArrayList<SnmpAgentChecker> checkers;
+
+    private static final Logger LOG = Logger.getLogger(SnmpAgent.class.getName());
+
+    public SnmpAgent(String mibFilename) {
+        MIBParser parser = new MIBParser();
+        mutexForMibTree = new Object();
+        mutexForClosing = new Object();
+        mutexForSendingHWCommand = new Object();
+        mutexForAnswerForCommandId = new Object();
+        mutexCanSendSnmpNotification = new Object();
+        checkers = new ArrayList<>();
+        oidToLeafNodeAgent = new HashMap<>();
+        oidToNextNode = new HashMap<>();
+        procesadores = new HashMap<>();
+        rootOfMibTree = parser.parseMib(mibFilename);
+        this.initSnmp();
+        answerForCommandID = new HashMap<>();
+        canSendSnmpNotification = true;
+
+        // leemos el community
+        community_read_only = Configuration.getInstance().getInfoDisplay(Loader.ADMINISTRATOR_COMMUNITY_READ_ONLY_FOR_NOTIFICATIONS);
+        community_read_write = Configuration.getInstance().getInfoDisplay(Loader.ADMINISTRATOR_COMMUNITY_READ_WRITE_FOR_NOTIFICATIONS);
+
+        if ((community_read_only == null) || (community_read_only.length() == 0)) {
+            LOG.error("Unexpected read only community: "
+                    + Configuration.getInstance().getInfoDisplay(Loader.ADMINISTRATOR_COMMUNITY_READ_ONLY_FOR_NOTIFICATIONS));
+            LOG.info("We assume that the community is public");
+            community_read_only = "public";
+        }
+
+        if ((community_read_write == null) || (community_read_write.length() == 0)) {
+            LOG.error("Unexpected read write community: "
+                    + Configuration.getInstance().getInfoDisplay(Loader.ADMINISTRATOR_COMMUNITY_READ_WRITE_FOR_NOTIFICATIONS));
+            LOG.info("We assume that the community is textel");
+            community_read_write = "textel";
+        }
+
+        // Creamos todos los checkers
+        Timer timer = new Timer(true);
+        HashMap<String, CheckerData> agentCheckers = Configuration.getInstance().getAgentCheckers();
+        for (String mainOidForChecker : agentCheckers.keySet()) {
+            ArrayList<String> oidList = agentCheckers.get(mainOidForChecker).getOidList();
+            String ok = agentCheckers.get(mainOidForChecker).getOk();
+            String ko = agentCheckers.get(mainOidForChecker).getKo();
+            SnmpAgentChecker currentChecker = new SnmpAgentChecker(this, mainOidForChecker, oidList, ok, ko);
+            timer.scheduleAtFixedRate(currentChecker, 0, 1000 * 1);
+            checkers.add(currentChecker);
+        }
+    }
+
+    private void initSnmp() {
+        try {
+            TransportMapping transport = new DefaultUdpTransportMapping(new UdpAddress("0.0.0.0/161"));
+            snmp = new Snmp(transport);
+
+            byte[] localEngineID = ((MPv3) snmp.getMessageProcessingModel(MessageProcessingModel.MPv3)).createLocalEngineID();
+            USM usm = new USM(SecurityProtocols.getInstance(), new OctetString(localEngineID), 0);
+            SecurityModels.getInstance().addSecurityModel(usm);
+            snmp.setLocalEngine(localEngineID, 0, 0);
+
+            snmp.addCommandResponder(new SnmpResponder(this, snmp));
+            snmp.listen();
+
+        } catch (IOException ex) {
+            LOG.error(ex);
+            LOG.info("Se cierra la aplicacion porque la ip/puerto para el protocolo Snmp estan ocupados");
+            System.exit(-1);
+        }
+    }
+
+    public void closeSnmp() {
+        try {
+            snmp.close();
+        } catch (IOException ex) {
+            LOG.error(ex);
+        }
+    }
+
+    public void printAgent() {
+        rootOfMibTree.print();
+    }
+
+    public void updateInfo(String oid, String newValue) {
+
+        synchronized (mutexForMibTree) {
+            String key = oid;
+            LeafNode currentNode = oidToLeafNodeAgent.get(key);
+
+            if (currentNode == null) {
+                currentNode = rootOfMibTree.getLeafNodeByOid(oid);
+                oidToLeafNodeAgent.put(key, currentNode);
+            }
+
+            // Si no lo he encontrado es que no existe
+            if (currentNode == null) {
+                LOG.error("No se ha encontrado el nodo con oid " + oid);
+
+            } else {
+                // Actualizar la info
+                boolean sendSwNotification = currentNode.updateValue(newValue, this);
+
+                // Hay que mandar una notificacion software
+                if (sendSwNotification) {
+                    SoftwareNotificationCondition condition = currentNode.getSwNotificationCondition();
+
+                    if (condition != null) {
+                        String mibNotificationOid = condition.getNotificationOid();
+                        String descriptionForLog = condition.getDescriptionForLog();
+                        this.sendSnmpNotification(mibNotificationOid, currentNode.getStringValue(), descriptionForLog);
+
+                    } else {
+                        LOG.error("Hay que mandar notificacion software pero no se encuentra la condicion");
+                    }
+                }
+            }
+
+            mutexForMibTree.notifyAll();
+        }
+    }
+
+    public Variable getInfoByOid(String oid) {
+        Variable value = null;
+
+        synchronized (mutexForMibTree) {
+            String key = oid;
+            LeafNode currentNode = oidToLeafNodeAgent.get(key);
+
+            if (currentNode == null) {
+                currentNode = rootOfMibTree.getLeafNodeByOid(oid);
+                oidToLeafNodeAgent.put(key, currentNode);
+            }
+
+            // Si no lo he encontrado es que no existe
+            if (currentNode == null) {
+                LOG.error("No se ha encontrado el nodo con oid " + oid);
+
+                // Devuelvo la info
+            } else {
+                value = currentNode.getSnmpValue();
+            }
+
+            mutexForMibTree.notifyAll();
+            return value;
+        }
+    }
+
+    public void setVelo(String oid, Velo velo) {
+        synchronized (mutexForMibTree) {
+            String key = oid;
+            LeafNode currentNode = oidToLeafNodeAgent.get(key);
+
+            if (currentNode == null) {
+                currentNode = rootOfMibTree.getLeafNodeByOid(oid);
+                oidToLeafNodeAgent.put(key, currentNode);
+            }
+
+            // Si no lo he encontrado es que no existe
+            if (currentNode == null) {
+                LOG.error("No se ha encontrado el nodo con oid [" + oid
+                        + "] al asignar el velo");
+
+            } else {
+                currentNode.setVelo(velo);
+            }
+
+            mutexForMibTree.notifyAll();
+        }
+    }
+
+    public VariableBinding getNextVariableBinding(String oid) {
+        VariableBinding var;
+
+        synchronized (mutexForMibTree) {
+            String key = oid;
+            Node currentNode = oidToNextNode.get(key);
+
+            if (currentNode == null) {
+                Node previousNode = rootOfMibTree.getNodeByOid(oid);
+                currentNode = previousNode.getNext(-1);
+                oidToNextNode.put(key, currentNode);
+            }
+
+            // Si no lo he encontrado es que no existe
+            if (currentNode == null) {
+                LOG.error("No se ha encontrado el siguiente nodo al nodo con oid " + oid);
+                var = new VariableBinding();
+            } else {
+                Variable value = currentNode.getSnmpValue();
+                //LOG.debug("Previo " + oid + " Next " + currentNode.getOid() + " value " + value);
+                OID currentOid = new OID(this.withoutPointZero(currentNode.getOid()));
+                var = (value != null) ? new VariableBinding(currentOid, value) : new VariableBinding(currentOid);
+            }
+
+            mutexForMibTree.notifyAll();
+            return var;
+        }
+    }
+
+    private String withoutPointZero(String oid) {
+        // le quitamos la terminación '.0' al OID que devolvemos empaquetado
+        // al Administrador que nos ha hecho un GET
+
+        if (oid.endsWith(".0")) {
+            oid = oid.substring(0, oid.length() - 2);
+        }
+        return oid;
+    }
+
+    public void sendSnmpNotification(String oid, String value, String descriptionForLog) {
+        String notificationIpAddress = this.getIpForNotification();
+        int notificationPort = this.getPortForNotification();
+
+        if ((this.getCandSendSnmpNotification()) && (notificationIpAddress != null) && (notificationIpAddress.length() > 0)) {
+
+            try {
+
+                // Configuramos el target
+                CommunityTarget target = new CommunityTarget();
+                target.setCommunity(new OctetString(community_read_only));
+                target.setAddress(new UdpAddress(notificationIpAddress + "/" + notificationPort));
+                target.setVersion(SnmpConstants.version2c);
+                target.setRetries(NUMBER_OF_RETRIES_TO_SEND_NOTIFICATION);
+                target.setTimeout(TIMEOUT_TO_SEND_NOTIFICATION);
+
+                // Configuramos el PDU
+                PDU notification = new PDU();
+                VariableBinding var = (value != null) ? new VariableBinding(new OID(oid), new OctetString(value))
+                        : new VariableBinding(new OID(oid));
+                notification.add(var);
+                notification.setType(PDU.NOTIFICATION);
+
+                if (descriptionForLog.contains("Notification")) {
+                    LOG.info(descriptionForLog + " con OID [" + oid + "] and value [" + value + "] to ["
+                            + notificationIpAddress + "/" + notificationPort + "]");
+                } else {
+                    LOG.info(descriptionForLog + " Notificacion con OID [" + oid + "] and value [" + value + "] to ["
+                            + notificationIpAddress + "/" + notificationPort + "]");
+                }
+
+                snmp.send(notification, target);
+
+            } catch (Exception ex) {
+                LOG.error("Error al mandar la notificacion con OID [" + oid + "] and value [" + value + "] :");
+                LOG.error(ex);
+            }
+        } else {
+            LOG.info("No se ha enviado notificacion porque uno de los siguientes valores lo impide:"
+                    + " canSendSnmpNotification [" + canSendSnmpNotification + "] notificationIpAddress ["
+                    + notificationIpAddress + "]");
+        }
+    }
+
+    public boolean checkSwNotification(String oid) {
+        boolean errorInLeafNode = true;
+
+        synchronized (mutexForMibTree) {
+            String key = oid;
+            LeafNode currentNode = oidToLeafNodeAgent.get(key);
+
+            if (currentNode == null) {
+                currentNode = rootOfMibTree.getLeafNodeByOid(oid);
+                oidToLeafNodeAgent.put(key, currentNode);
+            }
+
+            // Si no lo he encontrado es que no existe
+            if (currentNode == null) {
+                LOG.error("No se ha encontrado el nodo con oid " + oid);
+
+            } else {
+                errorInLeafNode = currentNode.checkSwNotificationCondition(this);
+            }
+
+            mutexForMibTree.notifyAll();
+            return errorInLeafNode;
+        }
+    }
+
+    public boolean checkWriteAccess(String oid) {
+        boolean canWrite = false;
+
+        synchronized (mutexForMibTree) {
+            String key = oid;
+            LeafNode currentNode = oidToLeafNodeAgent.get(key);
+
+            if (currentNode == null) {
+                currentNode = rootOfMibTree.getLeafNodeByOid(oid);
+                oidToLeafNodeAgent.put(key, currentNode);
+            }
+
+            // Si no lo he encontrado es que no existe
+            if (currentNode == null) {
+                LOG.error("No se ha encontrado el nodo con oid " + oid);
+
+            } else {
+                canWrite = currentNode.checkWriteAccess();
+            }
+
+            mutexForMibTree.notifyAll();
+        }
+
+        return canWrite;
+    }
+
+    public int processSetSnmpCommand(String oid, String newValue) {
+        int error;
+        String answerForCurrentCommand;
+
+        // Comprobamos que se puede hacer un set sobre ese oid
+        if (this.checkWriteAccess(oid)) {
+            Command command = Configuration.getInstance().getCommand(oid);
+            /////
+            if (command != null) {
+                String commandType = command.getType();
+
+                switch (commandType) {
+
+                    case Command.HARDWARE:
+                        CommandForHW commandForHW = (CommandForHW) command;///// revisar!!!
+                        String currentFullCommand = commandForHW.getFullCommandByLeafNodeValue(newValue);
+
+                        if (currentFullCommand == null) {
+                            error = SnmpConstants.SNMP_ERROR_WRONG_VALUE;
+
+                        } else if(SOFTWARE_COMMANDS_ON_SNMP_SET.contains(currentFullCommand)) {
+                            error = processSoftwareCommandOnSnmpSet(currentFullCommand, oid, newValue);
+
+                        } else {
+                            synchronized (mutexForSendingHWCommand) {
+                                String currentFace = commandForHW.getFaceId();
+                                String currentCard = commandForHW.getCardId();
+
+                                CardIdentifier cardIdentifier = new CardIdentifier(currentCard, currentFace);
+                                HardwareDataProcessor currentHardwareDataProcessor = procesadores.get(cardIdentifier);
+
+                                String currenCommandId = commandForHW.getCommandIdByLeafNodeValue(newValue);
+                                String answerCommand = currentHardwareDataProcessor.commandToAnswerCommand(currenCommandId, currentCard);
+                                this.updateAnswer(answerCommand, EMPTY_ANSWER);
+
+                                // Ejecuto el comando
+                                LOG.info("Se va a ejecutar el comando: " + currentFullCommand);
+                                boolean success = currentHardwareDataProcessor.sendCommand(currentFullCommand, currentCard, false);
+
+                                // Si se ha podido ejecutar el comando, escuchar la respuesta
+                                answerForCurrentCommand = (success) ? this.getAnswer(answerCommand) : HardwareDataProcessor.STRING_NO_VALUE;
+
+                                // Actualizar valor en el nodo correspondiente 
+                                if (!answerForCurrentCommand.equalsIgnoreCase(HardwareDataProcessor.STRING_NO_VALUE)) {
+                                    LOG.info("La respuesta para el comando: " + currentFullCommand + " es " + answerForCurrentCommand);
+                                    error = PDU.noError;
+                                    this.updateInfo(oid, newValue);
+
+                                } else {
+                                    LOG.info("No se ha obtenido respuesta para el comando:" + currentFullCommand);
+                                    error = SnmpConstants.SNMP_ERROR_RESOURCE_UNAVAILABLE;
+                                }
+
+                                mutexForSendingHWCommand.notifyAll();
+                            }
+                        }
+                        break;
+
+                    case Command.MEMORY:
+                        CommandForMEMORY commandForMEMORY = (CommandForMEMORY) command;
+                            Configuration.getInstance().addInfoToInfoDisplay(oid, newValue);
+                            this.updateInfo(oid, newValue);
+
+                            error = SnmpConstants.SNMP_ERROR_SUCCESS;   ////// comprobar error 
+
+                        break;
+
+                    case Command.XML:
+                        CommandForXML commandForXML = (CommandForXML) command;
+
+                        if (commandForXML.isCorrect()) {
+                            Loader.getInstance().changeAttributeNameValueTypeInXmlConfiguration(
+                                    "config.xml", ///// provisional, el nombre del archivo de configuración hay que buscarlo con getInstance
+                                    commandForXML.getNodeName(),
+                                    commandForXML.getNodeItemNumber(),
+                                    commandForXML.getChildName(),
+                                    commandForXML.getAttributeName(),
+                                    commandForXML.getAttributeNameContent(),
+                                    commandForXML.getValueName(),
+                                    newValue);
+
+                            Configuration.getInstance().addInfoToInfoDisplay(commandForXML.getAttributeNameContent(), newValue);
+                            Configuration.getInstance().addInfoToInfoDisplay(oid, newValue);
+                            this.updateInfo(oid, newValue);
+
+                            error = SnmpConstants.SNMP_ERROR_SUCCESS;   ////// comprobar error 
+
+                        } else {
+                            error = SnmpConstants.SNMP_ERROR_WRONG_VALUE;   ////// comprobar error 
+                        }
+                        break;
+
+                    default:
+                        error = SnmpConstants.SNMP_ERROR_RESOURCE_UNAVAILABLE;////// comprobar error 
+                        LOG.error("Unexpected command type [" + commandType + "]");
+                }
+
+            } else {
+                this.updateInfo(oid, newValue);
+                error = SnmpConstants.SNMP_ERROR_SUCCESS;   ////// comprobar error 
+                LOG.warn("Set command received without textel associated command for OID [" + oid + "]");
+            }
+
+        } else {
+            error = SnmpConstants.SNMP_ERROR_NOT_WRITEABLE;
+        }
+
+        return error;
+    }
+
+    public void sendCommand(String cardId, String command, String faceId) {
+        CardIdentifier cardIdentifier = new CardIdentifier(cardId, faceId);
+        HardwareDataProcessor currentHardwareDataProcessor = procesadores.get(cardIdentifier);
+
+        if (currentHardwareDataProcessor != null) {
+            boolean success = currentHardwareDataProcessor.sendCommand(command, cardId, false);
+
+            if (success == false) {
+                LOG.info("No se ha podido realizar el scan de leds, probablemente porque"
+                        + " se haya perdido la comunicación con la tarjeta");
+            }
+
+        } else {
+            LOG.error("No se ha encontrado procesador hardware para la tarjeta: " + cardId);
+        }
+    }
+
+    public void addHardwareDataProcessor(HardwareDataProcessor currentHardwareDataProcessor, TreeSet<String> cards, String faceId) {
+        for (String currentCard : cards) {
+            procesadores.put(new CardIdentifier(currentCard, faceId), currentHardwareDataProcessor);
+        }
+    }
+
+    public void updateAnswer(String command, String answer) {
+        synchronized (mutexForAnswerForCommandId) {
+            answerForCommandID.put(command, answer);
+            mutexForAnswerForCommandId.notifyAll();
+        }
+    }
+
+    public String getAnswer(String command) {
+        synchronized (mutexForAnswerForCommandId) {
+
+            if (answerForCommandID.get(command).equals(EMPTY_ANSWER)) {
+                try {
+                    mutexForAnswerForCommandId.wait(TIMEOUT_TO_RECEIVE_HARDWARE_RESPONSE);
+
+                } catch (InterruptedException ex) {
+                    LOG.error(ex);
+                }
+            }
+
+            String value = answerForCommandID.get(command);
+            answerForCommandID.put(command, EMPTY_ANSWER);
+            mutexForAnswerForCommandId.notifyAll();
+            return value;
+        }
+    }
+
+    public void closeAndRestartApp(int numberOfTimesAPPWasRebooted, String tmp_app_file) {
+        System.out.println("VOY A ENTRAR AL MUTEX");
+        synchronized (mutexForClosing) {
+            LOG.info("Rebooting APP...");
+            this.closeSnmp();
+            Utilities.getInstance().increaseCounterFile(tmp_app_file, numberOfTimesAPPWasRebooted);
+            Utilities.getInstance().RestartAPP();
+        }
+    }
+
+    public void closeAndRestartPc(int numberOfTimesPCWasRebooted, String tmp_pc_file, String tmp_app_prefix, String tmp_folder) {
+        synchronized (mutexForClosing) {
+            LOG.info("Rebooting PC...");
+
+            this.closeSnmp();
+            Utilities.getInstance().increaseCounterFile(tmp_pc_file, numberOfTimesPCWasRebooted);
+            Utilities.getInstance().deleteFilesOnCurrentFolder(tmp_app_prefix, tmp_folder);
+
+            /* Intentamos apagamos todos los displays (faces) */
+            String commandId = Configuration.getInstance().getCommandForSwitchingOffDisplay();
+            ArrayList<String> cardIds = Configuration.getInstance().getCardIdsForSwitchingOffDisplay();
+            for (HardwareDataProcessor currentProcessor : procesadores.values()) {
+                for (String currentCardId : cardIds) {
+                    currentProcessor.sendCommand(commandId, currentCardId, true);
+                }
+            }
+
+            /* Cerramos todos los procesadores */
+            for (HardwareDataProcessor currentProcessor : procesadores.values()) {
+                currentProcessor.exit();
+            }
+
+            /* Los parametros para apagar el ordenador en Xp se indican
+             con un menos "-". Ejemplo: -r -t 10. En windows 7 se indican
+             con una barra "/". Ejemplo: /r /t 10.
+             */
+            Utilities.getInstance().ShutDownPC("/r /t 10");
+        }
+    }
+
+    private void closeAndResetSoftware(boolean switchOffDisplay) {
+        synchronized (mutexForClosing) {
+            LOG.info("Rebooting PC...");
+            this.closeSnmp();
+
+            /* Intentamos apagamos todos los displays (faces) */
+            if(switchOffDisplay) {
+                String commandId = Configuration.getInstance().getCommandForSwitchingOffDisplay();
+                ArrayList<String> cardIds = Configuration.getInstance().getCardIdsForSwitchingOffDisplay();
+                for (HardwareDataProcessor currentProcessor : procesadores.values()) {
+                    for (String currentCardId : cardIds) {
+                        currentProcessor.sendCommand(commandId, currentCardId, true);
+                    }
+                }
+            }
+
+            /* Cerramos todos los procesadores */
+            for (HardwareDataProcessor currentProcessor : procesadores.values()) {
+                currentProcessor.exit();
+            }
+
+            Runtime r = Runtime.getRuntime();
+            try {
+                r.exec("sudo reboot now");
+            } catch (IOException ex) {
+                LOG.error(ex);
+            }
+            mutexForClosing.notifyAll();
+        }
+    }
+
+    private int runAudioTest(boolean runTest) {
+        String command = Configuration.getInstance().getInfoDisplay(Loader.COMMAND_AUDIO_TEST).trim();
+        int error = PDU.noError;
+
+        if(runTest && Objects.nonNull(command) ) {
+
+            if (Objects.nonNull(audioTestProcess)) {
+                LOG.error("Al ejecutar el test de audio, uno anterior seguía en ejecución. Se para el anterior y se ejecuta el actual.");
+                audioTestProcess.tryTokillProcessAndSubprocess();
+            }
+
+            Collection<String> effectiveCommand = new ArrayList<>();
+            for(String param : command.split(",")) {
+                effectiveCommand.add(param.trim());
+            }
+
+            audioTestProcess = new ProcessLauncher(effectiveCommand.toArray(new String[0]), -1);
+            audioTestProcess.start();
+
+        } else if (runTest && Objects.isNull(command)) {
+            error = SnmpConstants.SNMP_ERROR_RESOURCE_UNAVAILABLE;
+            LOG.error("No se puede realizar el test de audio porque no se ha definido en "
+                    + "el fichero de configuracion la información " + Loader.COMMAND_AUDIO_TEST);
+
+        } else if (!runTest && Objects.nonNull(audioTestProcess)) {
+            audioTestProcess.tryTokillProcessAndSubprocess();
+            audioTestProcess = null;
+
+        } else {
+            LOG.error("Al parar el test de audio, no estaba en ejecución.");
+        }
+        return error;
+    }
+    
+    private int runVideoTest(boolean runTest) {
+        String command = Configuration.getInstance().getInfoDisplay(Loader.COMMAND_VIDEO_TEST).trim();
+        int error = PDU.noError;
+
+        if(runTest && Objects.nonNull(command) ) {
+
+            if (Objects.nonNull(videoTestProcess)) {
+                LOG.error("Al ejecutar el test de video, uno anterior seguía en ejecución. Se para el anterior y se ejecuta el actual.");
+                videoTestProcess.tryTokillProcessAndSubprocess();
+            }
+
+            Collection<String> effectiveCommand = new ArrayList<>();
+            for(String param : command.split(",")) {
+                effectiveCommand.add(param.trim());
+            }
+
+            videoTestProcess = new ProcessLauncher(effectiveCommand.toArray(new String[0]), -1);
+            videoTestProcess.start();
+
+        } else if (runTest && Objects.isNull(command)) {
+            error = SnmpConstants.SNMP_ERROR_RESOURCE_UNAVAILABLE;
+            LOG.error("No se puede realizar el test de video porque no se ha definido en "
+                    + "el fichero de configuracion la información " + Loader.COMMAND_VIDEO_TEST);
+
+        } else if (!runTest && Objects.nonNull(videoTestProcess)) {
+            videoTestProcess.tryTokillProcessAndSubprocess();
+            videoTestProcess = null;
+
+        } else {
+            LOG.error("Al parar el test de video, no estaba en ejecución.");
+        }
+        return error;
+    }
+
+    public void checkCandSendSnmpNotification() {
+
+        boolean canSendAux = true;
+
+        synchronized (mutexCanSendSnmpNotification) {
+
+            for (HardwareDataProcessor currentProcessor : procesadores.values()) {
+
+                for (AbstractWriter currentWriter : currentProcessor.getWriters().values()) {
+                    canSendAux = (canSendAux) && (currentWriter.checkCanSendSnmpNotification());
+                }
+            }
+
+            canSendSnmpNotification = canSendAux;
+            mutexCanSendSnmpNotification.notifyAll();
+        }
+
+        LOG.info("El estado de canSendSnmpNotification es " + canSendSnmpNotification);
+    }
+
+    public boolean getCandSendSnmpNotification() {
+
+        boolean canSendAux;
+
+        synchronized (mutexCanSendSnmpNotification) {
+            canSendAux = canSendSnmpNotification;
+            mutexCanSendSnmpNotification.notifyAll();
+        }
+
+        return canSendAux;
+    }
+
+    public String getCommunity_read_write() {
+        return community_read_write;
+    }
+
+    private String getIpForNotification() {
+        String notificationIpAddress = Configuration.getInstance().getInfoDisplay(Loader.ADMINISTRATOR_IP_ADDRESS_FOR_SNMP_NOTIFICATIONS);
+
+        if ((notificationIpAddress == null) || (notificationIpAddress.length() == 0)) {
+            LOG.error("Unexpected notification ip address: "
+                    + Configuration.getInstance().getInfoDisplay(Loader.ADMINISTRATOR_IP_ADDRESS_FOR_SNMP_NOTIFICATIONS));
+            LOG.info("No se va a mandar ninguna notificacion dado que no tenemos su direccion IP");
+            notificationIpAddress = "";
+        }
+
+        return notificationIpAddress;
+    }
+
+    private int getPortForNotification() {
+        int notificationPort;
+
+        try {
+            notificationPort = Integer.parseInt(Configuration.getInstance().getInfoDisplay(Loader.ADMINISTRATOR_PORT_FOR_SNMP_NOTIFICATIONS));
+
+        } catch (NumberFormatException ex) {
+            LOG.error("Unexpected port notification: "
+                    + Configuration.getInstance().getInfoDisplay(Loader.ADMINISTRATOR_PORT_FOR_SNMP_NOTIFICATIONS));
+            LOG.info("We assume that the port notification is 162");
+            notificationPort = 162;
+        }
+
+        return notificationPort;
+    }
+
+    private int processSoftwareCommandOnSnmpSet(String currentCommand, String oid, String value) {
+        int error = SnmpConstants.SNMP_ERROR_WRONG_VALUE;
+
+        switch(currentCommand) {
+
+            case REBOOT:
+                closeAndResetSoftware(false);
+                error = PDU.noError;
+                break;
+
+            case REBOOT_WITH_DISPLAY_OFF:
+                closeAndResetSoftware(true);
+                error = PDU.noError;
+                break;
+
+            case AUDIO_TEST_ON:
+                error = runAudioTest(true);
+                break;
+
+            case AUDIO_TEST_OFF:
+                error = runAudioTest(false);
+                break;
+                
+            case VIDEO_TEST_ON:
+                error = runVideoTest(true);
+                break;
+
+            case VIDEO_TEST_OFF:
+                error = runVideoTest(false);
+                break;
+
+            default:
+                LOG.error("Unexpected software command on snmp set: " + currentCommand);
+        }
+        
+        if(error == PDU.noError) {
+            this.updateInfo(oid, value);
+        }
+
+        return error;
+    }
+
+}
